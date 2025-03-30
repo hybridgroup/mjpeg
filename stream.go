@@ -9,6 +9,7 @@
 package mjpeg
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -18,11 +19,32 @@ import (
 
 // Stream represents a single video feed.
 type Stream struct {
+	ctx           context.Context
 	start         time.Time
 	m             map[chan []byte]bool
 	frame         []byte
 	lock          sync.Mutex
 	FrameInterval time.Duration
+}
+
+// NewStream initializes and returns a new Stream.
+func NewStream() *Stream {
+	return &Stream{
+		m:             make(map[chan []byte]bool),
+		frame:         make([]byte, len(headerf)),
+		FrameInterval: 50 * time.Millisecond,
+		ctx:           context.Background(),
+	}
+}
+
+// NewStreamWithContext initializes and returns a new Stream.
+func NewStreamWithContext(ctx context.Context) *Stream {
+	return &Stream{
+		m:             make(map[chan []byte]bool),
+		frame:         make([]byte, len(headerf)),
+		FrameInterval: 50 * time.Millisecond,
+		ctx:           ctx,
+	}
 }
 
 const boundaryWord = "MJPEGBOUNDARY"
@@ -44,19 +66,25 @@ func (s *Stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.lock.Unlock()
 	s.start = time.Now()
 
+FRAMELOOP:
 	for {
 		time.Sleep(s.FrameInterval)
-		b := <-c
-		_, err := w.Write(b)
-		if err != nil {
-			slog.Error("Stream:%s write error %s", r.RemoteAddr, err.Error())
-			break
+		select {
+		case <-s.ctx.Done():
+			break FRAMELOOP
+		case b := <-c:
+			_, err := w.Write(b)
+			if err != nil {
+				slog.Debug("Stream:", r.RemoteAddr, err.Error())
+				break FRAMELOOP
+			}
 		}
 	}
 
 	s.lock.Lock()
 	delete(s.m, c)
 	s.lock.Unlock()
+
 	slog.Info("Stream:", r.RemoteAddr, "disconnected")
 }
 
@@ -69,23 +97,17 @@ func (s *Stream) UpdateJPEG(jpeg []byte) {
 	s.updateFrame(jpeg, elapsed)
 
 	s.lock.Lock()
+	defer s.lock.Unlock()
+
 	for c := range s.m {
 		// Select to skip streams which are sleeping to drop frames.
 		// This might need more thought.
 		select {
 		case c <- s.frame:
+		case <-s.ctx.Done():
+			return
 		default:
 		}
-	}
-	s.lock.Unlock()
-}
-
-// NewStream initializes and returns a new Stream.
-func NewStream() *Stream {
-	return &Stream{
-		m:             make(map[chan []byte]bool),
-		frame:         make([]byte, len(headerf)),
-		FrameInterval: 50 * time.Millisecond,
 	}
 }
 
