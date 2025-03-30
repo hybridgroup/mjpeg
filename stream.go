@@ -10,7 +10,7 @@ package mjpeg
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -35,7 +35,7 @@ const headerf = "\r\n" +
 
 // ServeHTTP responds to HTTP requests with the MJPEG stream, implementing the http.Handler interface.
 func (s *Stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Println("Stream:", r.RemoteAddr, "connected")
+	slog.Info("Stream:", r.RemoteAddr, "connected")
 	w.Header().Add("Content-Type", "multipart/x-mixed-replace;boundary="+boundaryWord)
 
 	c := make(chan []byte)
@@ -49,6 +49,7 @@ func (s *Stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		b := <-c
 		_, err := w.Write(b)
 		if err != nil {
+			slog.Error("Stream:%s write error %s", r.RemoteAddr, err.Error())
 			break
 		}
 	}
@@ -56,7 +57,7 @@ func (s *Stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.lock.Lock()
 	delete(s.m, c)
 	s.lock.Unlock()
-	log.Println("Stream:", r.RemoteAddr, "disconnected")
+	slog.Info("Stream:", r.RemoteAddr, "disconnected")
 }
 
 // UpdateJPEG pushes a new JPEG frame onto the clients.
